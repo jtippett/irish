@@ -44,9 +44,13 @@ function makeLogger(level = "warn"): Logger {
     const parts = args.map((a) =>
       typeof a === "string" ? a : JSON.stringify(a)
     );
-    Deno.stderr.writeSync(
-      enc.encode(`[${lvl.toUpperCase()}] ${parts.join(" ")}\n`)
-    );
+    try {
+      Deno.stderr.writeSync(
+        enc.encode(`[${lvl.toUpperCase()}] ${parts.join(" ")}\n`)
+      );
+    } catch {
+      // stderr broken — parent gone
+    }
   };
 
   const logger: Logger = {
@@ -107,7 +111,12 @@ function reviver(_key: string, value: unknown): unknown {
 const enc = new TextEncoder();
 
 function emit(msg: Record<string, unknown>) {
-  Deno.stdout.writeSync(enc.encode(JSON.stringify(msg, replacer) + "\n"));
+  try {
+    Deno.stdout.writeSync(enc.encode(JSON.stringify(msg, replacer) + "\n"));
+  } catch {
+    // Broken pipe — Elixir closed the port. Exit cleanly.
+    Deno.exit(0);
+  }
 }
 
 async function* readLines(): AsyncGenerator<string> {
