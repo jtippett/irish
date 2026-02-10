@@ -4,8 +4,8 @@ WhatsApp Web client for Elixir, powered by [Baileys](https://github.com/WhiskeyS
 
 Irish runs Baileys inside a Deno subprocess and talks to it over a JSON-lines
 protocol on stdio. Incoming WhatsApp events land in your GenServer as plain
-Elixir messages. Outgoing commands are synchronous calls that return when
-WhatsApp responds.
+Elixir messages with structured data. Outgoing commands are synchronous calls
+that return when WhatsApp responds.
 
 ```
 Elixir GenServer  ──stdio──>  Deno (bridge.ts)  ──WebSocket──>  WhatsApp
@@ -51,7 +51,8 @@ receive do
 end
 
 # Send a text message
-{:ok, msg} = Irish.send_message(wa, "15551234567@s.whatsapp.net", %{text: "Hello from Elixir!"})
+{:ok, %Irish.Message{} = msg} =
+  Irish.send_message(wa, "15551234567@s.whatsapp.net", %{text: "Hello from Elixir!"})
 
 # Send an image from a URL
 {:ok, _} = Irish.send_message(wa, "15551234567@s.whatsapp.net", %{
@@ -81,15 +82,46 @@ IO.puts("Enter this code in WhatsApp: #{code}")
 
 ## Receiving messages
 
-All Baileys events arrive as `{:wa, event_name, data}` messages:
+All Baileys events arrive as `{:wa, event_name, data}` messages. By default,
+event data is converted to typed structs (see [Data types](#data-types) below).
 
 ```elixir
-def handle_info({:wa, "messages.upsert", %{"messages" => messages, "type" => "notify"}}, state) do
+def handle_info({:wa, "messages.upsert", %{messages: messages, type: :notify}}, state) do
   for msg <- messages do
-    from = msg["key"]["remoteJid"]
-    text = get_in(msg, ["message", "conversation"]) ||
-           get_in(msg, ["message", "extendedTextMessage", "text"])
-    if text, do: IO.puts("#{from}: #{text}")
+    sender = Irish.Message.from(msg)
+    text = Irish.Message.text(msg)
+    type = Irish.Message.type(msg)
+
+    if text do
+      IO.puts("[#{type}] #{msg.push_name} (#{sender}): #{text}")
+    end
+
+    # React to media messages
+    if Irish.Message.media?(msg) do
+      Irish.react(state.conn, msg.key.remote_jid, msg.key, "👀")
+    end
+  end
+  {:noreply, state}
+end
+
+def handle_info({:wa, "contacts.upsert", contacts}, state) do
+  for %Irish.Contact{} = contact <- contacts do
+    IO.puts("New contact: #{Irish.Contact.display_name(contact)}")
+  end
+  {:noreply, state}
+end
+
+def handle_info({:wa, "presence.update", %{id: chat_id, presences: presences}}, state) do
+  for {jid, %Irish.Presence{last_known_presence: presence}} <- presences do
+    IO.puts("#{jid} is #{presence} in #{chat_id}")
+  end
+  {:noreply, state}
+end
+
+def handle_info({:wa, "call", calls}, state) do
+  for %Irish.Call{} = call <- calls do
+    kind = if call.is_video, do: "video", else: "voice"
+    IO.puts("Incoming #{kind} call from #{call.from}: #{call.status}")
   end
   {:noreply, state}
 end
@@ -101,6 +133,27 @@ end
 
 # Catch-all for events you don't care about
 def handle_info({:wa, _event, _data}, state), do: {:noreply, state}
+```
+
+### Opting out of structs
+
+If you prefer raw maps (the Baileys JSON as-is), pass `struct_events: false`:
+
+```elixir
+{:ok, wa} = Irish.start_link(
+  auth_dir: "/tmp/wa_auth",
+  handler: self(),
+  struct_events: false
+)
+
+# Events now arrive as raw camelCase maps:
+receive do
+  {:wa, "messages.upsert", %{"messages" => messages, "type" => "notify"}} ->
+    for msg <- messages do
+      text = get_in(msg, ["message", "conversation"])
+      IO.puts("#{msg["key"]["remoteJid"]}: #{text}")
+    end
+end
 ```
 
 ## Supervision
@@ -121,16 +174,82 @@ Then call functions by name:
 Irish.send_message(:whatsapp, jid, %{text: "hello"})
 ```
 
+## Data types
+
+Irish converts Baileys' camelCase JSON maps into Elixir structs with
+snake_case fields. All structs provide a `from_raw/1` function for manual
+conversion.
+
+| Struct | Description | Key fields |
+|---|---|---|
+| `Irish.Message` | A WhatsApp message | `key`, `message`, `push_name`, `status`, `message_timestamp` |
+| `Irish.MessageKey` | Identifies a specific message | `remote_jid`, `from_me`, `id`, `participant` |
+| `Irish.Contact` | A WhatsApp contact | `id`, `name`, `notify`, `verified_name`, `phone_number` |
+| `Irish.Chat` | A conversation | `id`, `name`, `unread_count`, `archived`, `pinned` |
+| `Irish.Group` | Group metadata | `id`, `subject`, `owner`, `description`, `participants` |
+| `Irish.Group.Participant` | A group member | `id`, `phone_number`, `admin` |
+| `Irish.Presence` | Online/typing status | `last_known_presence`, `last_seen` |
+| `Irish.Call` | A call event | `id`, `from`, `status`, `is_video`, `is_group` |
+
+### Message helpers
+
+`Irish.Message` provides helpers for common access patterns:
+
+```elixir
+msg = List.first(messages)
+
+Irish.Message.text(msg)    # => "Hello!" — extracts text from any message type
+Irish.Message.type(msg)    # => :text — content type atom
+Irish.Message.media?(msg)  # => false — true for image/video/audio/document/sticker
+Irish.Message.from(msg)    # => "15551234567@s.whatsapp.net" — sender JID
+```
+
+Content type atoms: `:text`, `:image`, `:video`, `:audio`, `:document`,
+`:sticker`, `:location`, `:live_location`, `:contact`, `:contacts`,
+`:reaction`, `:poll`, `:view_once`, `:ephemeral`, `:edited`, `:protocol`,
+`:unknown`.
+
+Message status atoms: `:error`, `:pending`, `:server_ack`, `:delivery_ack`,
+`:read`, `:played`.
+
+### MessageKey
+
+`Irish.MessageKey` round-trips between structs and the raw maps the bridge
+expects:
+
+```elixir
+# From an event
+key = msg.key  # => %Irish.MessageKey{remote_jid: "...", from_me: false, id: "..."}
+
+# Use directly in API calls
+Irish.react(conn, key.remote_jid, key, "👍")
+Irish.read_messages(conn, [key])
+
+# Convert back to raw map if needed
+Irish.MessageKey.to_raw(key)  # => %{"remoteJid" => "...", "fromMe" => false, "id" => "..."}
+```
+
+### Contact helpers
+
+```elixir
+Irish.Contact.display_name(contact)
+# Returns first non-nil of: name, notify, verified_name, phone_number, id
+```
+
 ## API reference
 
 ### Messaging
 
-| Function | Description |
-|---|---|
-| `send_message(conn, jid, content, opts \\ %{})` | Send any message type |
-| `read_messages(conn, keys)` | Mark messages as read |
-| `send_presence(conn, type, jid \\ nil)` | Send `"composing"`, `"available"`, etc. |
-| `presence_subscribe(conn, jid)` | Get notified of a contact's presence |
+| Function | Returns | Description |
+|---|---|---|
+| `send_message(conn, jid, content, opts \\ %{})` | `{:ok, %Message{}}` | Send any message type |
+| `read_messages(conn, keys)` | `{:ok, any}` | Mark messages as read (accepts `%MessageKey{}` or raw maps) |
+| `react(conn, jid, key, emoji)` | `{:ok, %Message{}}` | React to a message (accepts `%MessageKey{}` or raw maps) |
+| `unreact(conn, jid, key)` | `{:ok, %Message{}}` | Remove a reaction |
+| `send_receipts(conn, keys, type)` | `{:ok, any}` | Send read/played receipts (accepts `%MessageKey{}` or raw maps) |
+| `send_presence(conn, type, jid \\ nil)` | `{:ok, any}` | Send `"composing"`, `"available"`, etc. |
+| `presence_subscribe(conn, jid)` | `{:ok, any}` | Get notified of a contact's presence |
+| `download_media(conn, message)` | `{:ok, binary}` | Download and decrypt media |
 
 ### Profile
 
@@ -144,16 +263,17 @@ Irish.send_message(:whatsapp, jid, %{text: "hello"})
 
 ### Groups
 
-| Function | Description |
-|---|---|
-| `group_metadata(conn, jid)` | Get group info |
-| `group_create(conn, subject, participants)` | Create a group |
-| `group_update_subject(conn, jid, subject)` | Rename a group |
-| `group_update_description(conn, jid, desc)` | Update group description |
-| `group_participants_update(conn, jid, participants, action)` | `"add"`, `"remove"`, `"promote"`, `"demote"` |
-| `group_invite_code(conn, jid)` | Get invite link code |
-| `group_leave(conn, jid)` | Leave a group |
-| `group_fetch_all(conn)` | List all groups you're in |
+| Function | Returns | Description |
+|---|---|---|
+| `group_metadata(conn, jid)` | `{:ok, %Group{}}` | Get group info |
+| `group_create(conn, subject, participants)` | `{:ok, %Group{}}` | Create a group |
+| `group_fetch_all(conn)` | `{:ok, [%Group{}]}` | List all groups you're in |
+| `group_get_invite_info(conn, code)` | `{:ok, %Group{}}` | Info about an invite link |
+| `group_update_subject(conn, jid, subject)` | | Rename a group |
+| `group_update_description(conn, jid, desc)` | | Update group description |
+| `group_participants_update(conn, jid, participants, action)` | | `"add"`, `"remove"`, `"promote"`, `"demote"` |
+| `group_invite_code(conn, jid)` | | Get invite link code |
+| `group_leave(conn, jid)` | | Leave a group |
 
 ### Privacy
 
@@ -173,19 +293,36 @@ Irish.send_message(:whatsapp, jid, %{text: "hello"})
 
 Key events you'll receive as `{:wa, event_name, data}`:
 
-| Event | When |
-|---|---|
-| `"connection.update"` | Connection state changes, QR codes |
-| `"messages.upsert"` | New messages (incoming and outgoing) |
-| `"messages.update"` | Delivery/read receipts |
-| `"chats.upsert"` | New chats appear |
-| `"contacts.upsert"` | New contacts |
-| `"groups.update"` | Group metadata changes |
-| `"group-participants.update"` | Members added/removed/promoted |
-| `"presence.update"` | Typing indicators, online status |
-| `"call"` | Incoming calls |
-| `"creds.update"` | Session credentials changed (auto-persisted) |
-| `"messaging-history.set"` | History sync chunks |
+| Event | Struct shape | When |
+|---|---|---|
+| `"connection.update"` | raw map | Connection state changes, QR codes |
+| `"messages.upsert"` | `%{messages: [%Message{}], type: :notify \| :append}` | New messages |
+| `"messages.update"` | `[%{key: %MessageKey{}, update: map}]` | Delivery/read receipts |
+| `"messages.delete"` | `%{keys: [%MessageKey{}]}` | Deleted messages |
+| `"messages.reaction"` | `[%{key: %MessageKey{}, reaction: map}]` | Reactions |
+| `"message-receipt.update"` | `[%{key: %MessageKey{}, receipt: map}]` | Granular receipts |
+| `"chats.upsert"` | `[%Chat{}]` | New chats appear |
+| `"chats.update"` | `[%Chat{}]` | Chat metadata changes |
+| `"contacts.upsert"` | `[%Contact{}]` | New contacts |
+| `"contacts.update"` | `[%Contact{}]` | Contact changes |
+| `"groups.upsert"` | `[%Group{}]` | New groups |
+| `"groups.update"` | `[%Group{}]` | Group metadata changes |
+| `"group-participants.update"` | raw map | Members added/removed/promoted |
+| `"presence.update"` | `%{id: jid, presences: %{jid => %Presence{}}}` | Typing, online status |
+| `"call"` | `[%Call{}]` | Incoming calls |
+| `"creds.update"` | raw map | Session credentials changed |
+| `"messaging-history.set"` | raw map | History sync chunks |
+
+## Options
+
+| Option | Default | Description |
+|---|---|---|
+| `:auth_dir` | `"./wa_auth"` | Directory to store WhatsApp session |
+| `:handler` | caller PID | PID to receive `{:wa, event, data}` messages |
+| `:name` | none | Optional registered name for the process |
+| `:config` | `%{}` | Baileys socket config overrides |
+| `:timeout` | `30_000` | Default command timeout in ms |
+| `:struct_events` | `true` | Convert event data to structs (`false` for raw maps) |
 
 ## JID format
 
@@ -222,8 +359,8 @@ The `content` argument to `send_message/4` is a map matching Baileys'
 # Contact
 %{contacts: %{displayName: "Jane", contacts: [%{vcard: "BEGIN:VCARD\n..."}]}}
 
-# Reaction
-%{react: %{text: "👍", key: message_key}}
+# Reaction (accepts %MessageKey{} struct or raw map)
+%{react: %{text: "👍", key: msg.key}}
 
 # Reply (pass original message as option)
 Irish.send_message(conn, jid, %{text: "replying!"}, %{quoted: original_msg})
@@ -235,8 +372,8 @@ Irish spawns a Deno process running `bridge.ts`, which creates a Baileys
 WhatsApp socket and bridges it to Elixir over stdin/stdout:
 
 - **Events** (WhatsApp -> Elixir): Baileys emits events; the bridge serializes
-  them as JSON lines on stdout; the GenServer decodes and forwards them to your
-  handler as `{:wa, event, data}` messages.
+  them as JSON lines on stdout; the GenServer decodes them, converts to structs
+  via `Irish.Event`, and forwards to your handler as `{:wa, event, data}`.
 
 - **Commands** (Elixir -> WhatsApp): `Irish.send_message/4` etc. write a JSON
   command with a correlation ID to the bridge's stdin. The bridge calls the

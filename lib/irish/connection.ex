@@ -6,6 +6,10 @@ defmodule Irish.Connection do
   to the configured handler pid. Outgoing commands use `command/3,4` which
   correlates each request with a JSON response from the bridge.
 
+  When `struct_events: true` (the default), event data is converted to typed
+  structs via `Irish.Event.convert/2` before being sent to the handler. Pass
+  `struct_events: false` to receive raw camelCase maps instead.
+
   Uses an Erlang Port rather than Exile because Port delivers stdout data as
   messages to the owning process — a natural fit for GenServer, with no need
   for a separate reader process.
@@ -22,7 +26,8 @@ defmodule Irish.Connection do
     :config,
     :timeout,
     buffer: "",
-    pending: %{}
+    pending: %{},
+    struct_events: true
   ]
 
   # ---------------------------------------------------------------------------
@@ -67,12 +72,15 @@ defmodule Irish.Connection do
         {:cd, bridge_dir}
       ])
 
+    struct_events = Keyword.get(opts, :struct_events, true)
+
     state = %__MODULE__{
       port: port,
       handler: handler,
       auth_dir: auth_dir,
       config: config,
-      timeout: timeout
+      timeout: timeout,
+      struct_events: struct_events
     }
 
     send_init(state)
@@ -161,7 +169,9 @@ defmodule Irish.Connection do
   end
 
   defp dispatch(%{"event" => event, "data" => data}, state) do
-    send(state.handler, {:wa, event, decode_buffers(data)})
+    decoded = decode_buffers(data)
+    payload = if state.struct_events, do: Irish.Event.convert(event, decoded), else: decoded
+    send(state.handler, {:wa, event, payload})
     state
   end
 

@@ -12,6 +12,7 @@ import makeWASocket, {
   useMultiFileAuthState,
   DisconnectReason,
   makeCacheableSignalKeyStore,
+  downloadMediaMessage,
   type WASocket,
   type BaileysEventMap,
 } from "baileys";
@@ -88,6 +89,13 @@ function replacer(_key: string, value: unknown): unknown {
     if (v.type === "Buffer" && Array.isArray(v.data)) {
       return { __b64: uint8ToBase64(new Uint8Array(v.data as number[])) };
     }
+  }
+  return value;
+}
+
+function reviver(_key: string, value: unknown): unknown {
+  if (typeof value === "object" && value !== null && "__b64" in value) {
+    return Buffer.from((value as any).__b64, "base64");
   }
   return value;
 }
@@ -274,6 +282,51 @@ async function handle(c: Cmd): Promise<unknown> {
     case "fetch_blocklist":
       return sock.fetchBlocklist();
 
+    // --- media ---
+    case "download_media":
+      return await downloadMediaMessage(a.message, "buffer", {});
+
+    // --- groups (extended) ---
+    case "group_toggle_ephemeral":
+      await sock.groupToggleEphemeral(a.jid, a.expiration);
+      return null;
+    case "group_setting_update":
+      await sock.groupSettingUpdate(a.jid, a.setting);
+      return null;
+    case "group_revoke_invite":
+      return sock.groupRevokeInvite(a.jid);
+    case "group_accept_invite":
+      return sock.groupAcceptInvite(a.code);
+    case "group_get_invite_info":
+      return sock.groupGetInviteInfo(a.code);
+    case "group_request_participants_list":
+      return sock.groupRequestParticipantsList(a.jid);
+    case "group_request_participants_update":
+      return sock.groupRequestParticipantsUpdate(a.jid, a.participants, a.action);
+    case "group_member_add_mode":
+      return sock.groupMemberAddMode(a.jid, a.mode);
+    case "group_join_approval_mode":
+      return sock.groupJoinApprovalMode(a.jid, a.mode);
+
+    // --- profile (extended) ---
+    case "update_profile_picture":
+      await sock.updateProfilePicture(a.jid, a.content);
+      return null;
+    case "remove_profile_picture":
+      await sock.removeProfilePicture(a.jid);
+      return null;
+
+    // --- chat ---
+    case "chat_modify":
+      await sock.chatModify(a.mod, a.jid);
+      return null;
+    case "star_messages":
+      await sock.star(a.jid, a.messages, a.star);
+      return null;
+    case "send_receipts":
+      await sock.sendReceipts(a.keys, a.type);
+      return null;
+
     // --- auth ---
     case "request_pairing_code":
       return sock.requestPairingCode(a.phone_number, a.custom_code);
@@ -297,7 +350,7 @@ async function main() {
   const first = await stdin.next();
   if (first.done) Deno.exit(1);
 
-  const init: Cmd = JSON.parse(first.value);
+  const init: Cmd = JSON.parse(first.value, reviver);
   if (init.cmd !== "init") {
     logger.error("First command must be init");
     Deno.exit(1);
@@ -319,7 +372,7 @@ async function main() {
   for await (const line of stdin) {
     let id: string | undefined;
     try {
-      const cmd: Cmd = JSON.parse(line);
+      const cmd: Cmd = JSON.parse(line, reviver);
       id = cmd.id;
       const result = await handle(cmd);
       emit({ id, ok: true, data: result ?? null });
