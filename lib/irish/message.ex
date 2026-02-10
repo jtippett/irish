@@ -132,8 +132,8 @@ defmodule Irish.Message do
 
   @doc "Returns the sender JID (participant for groups, remote_jid for 1:1)."
   @spec from(t()) :: String.t() | nil
-  def from(%__MODULE__{participant: p}) when is_binary(p), do: p
-  def from(%__MODULE__{key: %MessageKey{participant: p}}) when is_binary(p), do: p
+  def from(%__MODULE__{participant: p}) when is_binary(p) and p != "", do: p
+  def from(%__MODULE__{key: %MessageKey{participant: p}}) when is_binary(p) and p != "", do: p
   def from(%__MODULE__{key: %MessageKey{remote_jid: jid}}), do: jid
   def from(_), do: nil
 

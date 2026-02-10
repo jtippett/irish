@@ -18,6 +18,7 @@ defmodule Irish.Connection do
   require Logger
 
   @default_timeout 30_000
+  @default_init_timeout 30_000
 
   defstruct [
     :port,
@@ -25,9 +26,12 @@ defmodule Irish.Connection do
     :auth_dir,
     :config,
     :timeout,
+    :init_id,
+    :stop_reason,
     buffer: "",
     pending: %{},
-    struct_events: true
+    struct_events: true,
+    initialized: false
   ]
 
   # ---------------------------------------------------------------------------
@@ -40,8 +44,9 @@ defmodule Irish.Connection do
   end
 
   @doc "Send a command to the bridge and wait for the response."
-  def command(conn, cmd, args \\ %{}, timeout \\ @default_timeout) do
-    GenServer.call(conn, {:command, cmd, args}, timeout)
+  def command(conn, cmd, args \\ %{}, timeout \\ :default) do
+    call_timeout = if timeout == :default, do: @default_timeout + 5_000, else: timeout + 5_000
+    GenServer.call(conn, {:command, cmd, args, timeout}, call_timeout)
   end
 
   # ---------------------------------------------------------------------------
@@ -54,23 +59,9 @@ defmodule Irish.Connection do
     auth_dir = Keyword.get(opts, :auth_dir, Path.join(File.cwd!(), "wa_auth"))
     config = Keyword.get(opts, :config, %{})
     timeout = Keyword.get(opts, :timeout, @default_timeout)
+    init_timeout = Keyword.get(opts, :init_timeout, @default_init_timeout)
 
-    bridge_dir = :code.priv_dir(:irish) |> to_string()
-    bridge_path = Path.join(bridge_dir, "bridge.ts")
-
-    ensure_npm_deps!(bridge_dir)
-    File.mkdir_p!(auth_dir)
-
-    deno = System.find_executable("deno") || raise "deno not found in PATH"
-
-    port =
-      Port.open({:spawn_executable, deno}, [
-        :binary,
-        :use_stdio,
-        :exit_status,
-        {:args, ["run", "--allow-all", "--node-modules-dir=manual", bridge_path]},
-        {:cd, bridge_dir}
-      ])
+    port = open_port(opts)
 
     struct_events = Keyword.get(opts, :struct_events, true)
 
@@ -83,16 +74,21 @@ defmodule Irish.Connection do
       struct_events: struct_events
     }
 
-    send_init(state)
+    state = send_init(state, init_timeout)
     {:ok, state}
   end
 
   @impl true
-  def handle_call({:command, cmd, args}, from, state) do
+  def handle_call({:command, _cmd, _args, _timeout}, _from, %{initialized: false} = state) do
+    {:reply, {:error, :not_initialized}, state}
+  end
+
+  def handle_call({:command, cmd, args, timeout}, from, state) do
+    actual_timeout = if timeout == :default, do: state.timeout, else: timeout
     id = gen_id()
-    payload = Jason.encode!(%{id: id, cmd: cmd, args: args})
+    {:ok, payload} = Irish.Bridge.Protocol.encode_request(id, cmd, args)
     Port.command(state.port, payload <> "\n")
-    timer = Process.send_after(self(), {:cmd_timeout, id}, state.timeout)
+    timer = Process.send_after(self(), {:cmd_timeout, id}, actual_timeout)
     {:noreply, put_in(state.pending[id], {from, timer})}
   end
 
@@ -111,7 +107,13 @@ defmodule Irish.Connection do
         end
       end)
 
-    {:noreply, state}
+    case state do
+      %{initialized: :stopping, stop_reason: reason} ->
+        {:stop, reason, state}
+
+      _ ->
+        {:noreply, state}
+    end
   end
 
   def handle_info({port, {:exit_status, code}}, %{port: port} = state) do
@@ -130,6 +132,13 @@ defmodule Irish.Connection do
     end
   end
 
+  def handle_info({:init_timeout, init_id}, %{init_id: init_id, initialized: false} = state) do
+    Logger.error("[Irish] init timeout — bridge did not respond")
+    {:stop, {:init_failed, :timeout}, state}
+  end
+
+  def handle_info({:init_timeout, _old_id}, state), do: {:noreply, state}
+
   def handle_info(_msg, state), do: {:noreply, state}
 
   @impl true
@@ -145,20 +154,63 @@ defmodule Irish.Connection do
   # Internal
   # ---------------------------------------------------------------------------
 
-  defp send_init(state) do
+  defp open_port(opts) do
+    case Keyword.get(opts, :bridge_cmd) do
+      {cmd, args} ->
+        exe = System.find_executable(cmd) || raise "#{cmd} not found in PATH"
+
+        Port.open({:spawn_executable, exe}, [
+          :binary,
+          :use_stdio,
+          :exit_status,
+          {:args, args}
+        ])
+
+      nil ->
+        bridge_dir = :code.priv_dir(:irish) |> to_string()
+        bridge_path = Path.join(bridge_dir, "bridge.ts")
+
+        ensure_npm_deps!(bridge_dir)
+        File.mkdir_p!(Keyword.get(opts, :auth_dir, "wa_auth"))
+
+        deno = System.find_executable("deno") || raise "deno not found in PATH"
+
+        Port.open({:spawn_executable, deno}, [
+          :binary,
+          :use_stdio,
+          :exit_status,
+          {:args, ["run", "--allow-net", "--allow-read", "--allow-write", "--allow-env", "--node-modules-dir=manual", bridge_path]},
+          {:cd, bridge_dir}
+        ])
+    end
+  end
+
+  defp send_init(state, init_timeout) do
     id = gen_id()
 
-    payload =
-      Jason.encode!(%{
-        id: id,
-        cmd: "init",
-        args: %{auth_dir: Path.expand(state.auth_dir), config: state.config}
+    {:ok, payload} =
+      Irish.Bridge.Protocol.encode_request(id, "init", %{
+        auth_dir: Path.expand(state.auth_dir),
+        config: state.config
       })
 
     Port.command(state.port, payload <> "\n")
+    Process.send_after(self(), {:init_timeout, id}, init_timeout)
+    %{state | init_id: id}
   end
 
   # -- Dispatch responses & events --
+
+  defp dispatch(%{"id" => id, "ok" => true, "data" => data}, %{init_id: id, initialized: false} = state) do
+    Logger.info("[Irish] bridge initialized")
+    %{state | initialized: true, init_id: nil}
+    |> decode_and_ignore(data)
+  end
+
+  defp dispatch(%{"id" => id, "ok" => false, "error" => err}, %{init_id: id, initialized: false} = state) do
+    Logger.error("[Irish] init failed: #{inspect(err)}")
+    %{state | initialized: :stopping, stop_reason: {:init_failed, err}}
+  end
 
   defp dispatch(%{"id" => id, "ok" => true, "data" => data}, state) when is_binary(id) do
     resolve(id, {:ok, decode_buffers(data)}, state)
@@ -176,6 +228,8 @@ defmodule Irish.Connection do
   end
 
   defp dispatch(_msg, state), do: state
+
+  defp decode_and_ignore(state, _data), do: state
 
   defp resolve(id, reply, state) do
     case Map.pop(state.pending, id) do

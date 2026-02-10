@@ -110,9 +110,13 @@ function reviver(_key: string, value: unknown): unknown {
 
 const enc = new TextEncoder();
 
+const PROTOCOL_VERSION = 1;
+
 function emit(msg: Record<string, unknown>) {
   try {
-    Deno.stdout.writeSync(enc.encode(JSON.stringify(msg, replacer) + "\n"));
+    Deno.stdout.writeSync(
+      enc.encode(JSON.stringify({ v: PROTOCOL_VERSION, ...msg }, replacer) + "\n")
+    );
   } catch {
     // Broken pipe — Elixir closed the port. Exit cleanly.
     Deno.exit(0);
@@ -167,6 +171,7 @@ const EVENTS: (keyof BaileysEventMap)[] = [
 ];
 
 let sock: WASocket | null = null;
+let reconnecting = false;
 const msgCache = new Map<string, unknown>();
 const MAX_CACHE = 5000;
 
@@ -219,8 +224,13 @@ async function connect(
         emit({ event: "__exit", data: { reason: "logged_out" } });
         Deno.exit(1);
       }
-      logger.info("Reconnecting…");
-      connect(authDir, config);
+      if (!reconnecting) {
+        reconnecting = true;
+        logger.info("Reconnecting…");
+        connect(authDir, config).finally(() => {
+          reconnecting = false;
+        });
+      }
     }
   });
 }
@@ -340,11 +350,13 @@ async function handle(c: Cmd): Promise<unknown> {
     case "request_pairing_code":
       return sock.requestPairingCode(a.phone_number, a.custom_code);
     case "logout":
-      await sock.logout(a.msg);
+      await sock.logout();
       return null;
 
     default:
-      throw new Error(`unknown_command: ${c.cmd}`);
+      throw Object.assign(new Error(`unknown command: ${c.cmd}`), {
+        code: "unknown_command",
+      });
   }
 }
 
@@ -386,10 +398,15 @@ async function main() {
       const result = await handle(cmd);
       emit({ id, ok: true, data: result ?? null });
     } catch (err) {
+      const code =
+        err instanceof Error && "code" in err
+          ? (err as any).code
+          : "command_error";
+      const message = err instanceof Error ? err.message : String(err);
       emit({
         id,
         ok: false,
-        error: err instanceof Error ? err.message : String(err),
+        error: { code, message, details: {} },
       });
     }
   }
