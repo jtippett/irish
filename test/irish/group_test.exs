@@ -77,6 +77,24 @@ defmodule Irish.GroupTest do
     end
   end
 
+  describe "drift tolerance" do
+    test "coerces string creation timestamp" do
+      group = Group.from_raw(%{"id" => "x@g.us", "creation" => "1547190709"})
+      assert group.creation == 1_547_190_709
+    end
+
+    test "coerces string size" do
+      group = Group.from_raw(%{"id" => "x@g.us", "size" => "5"})
+      assert group.size == 5
+    end
+
+    test "handles missing phoneNumber in participant" do
+      p = Participant.from_raw(%{"id" => "123@lid"})
+      assert p.id == "123@lid"
+      assert p.phone_number == nil
+    end
+  end
+
   describe "from_raw with nested participants" do
     test "participants are Participant structs" do
       group = Group.from_raw(@raw_group)

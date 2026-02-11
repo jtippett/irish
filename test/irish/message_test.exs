@@ -74,6 +74,21 @@ defmodule Irish.MessageTest do
       assert msg.message_timestamp == nil
     end
 
+    test "coerces float timestamp" do
+      msg = Message.from_raw(%{"messageTimestamp" => 1700000000.5})
+      assert msg.message_timestamp == 1_700_000_000
+    end
+
+    test "coerces empty string participant to nil" do
+      msg = Message.from_raw(%{"participant" => ""})
+      assert msg.participant == nil
+    end
+
+    test "coerces string messageStubType" do
+      msg = Message.from_raw(%{"messageStubType" => "27"})
+      assert msg.message_stub_type == 27
+    end
+
     test "handles unknown status code" do
       msg = Message.from_raw(%{"status" => 99})
       assert msg.status == nil

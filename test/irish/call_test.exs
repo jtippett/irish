@@ -55,5 +55,20 @@ defmodule Irish.CallTest do
       assert call.offline == false
       assert call.status == nil
     end
+
+    test "coerces string date to integer" do
+      call = Call.from_raw(%{"date" => "1700000000"})
+      assert call.date == 1_700_000_000
+    end
+
+    test "coerces float latency to integer" do
+      call = Call.from_raw(%{"latencyMs" => 150.7})
+      assert call.latency_ms == 150
+    end
+
+    test "handles nil date" do
+      call = Call.from_raw(%{"date" => nil})
+      assert call.date == nil
+    end
   end
 end

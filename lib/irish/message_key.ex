@@ -43,9 +43,9 @@ defmodule Irish.MessageKey do
   def from_raw(data) when is_map(data) do
     %__MODULE__{
       remote_jid: data["remoteJid"],
-      from_me: data["fromMe"] == true,
+      from_me: Irish.Coerce.bool(data["fromMe"]),
       id: data["id"],
-      participant: data["participant"]
+      participant: Irish.Coerce.string(data["participant"])
     }
   end
 

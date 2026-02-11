@@ -31,7 +31,7 @@ defmodule Irish.Message do
       Irish.Message.from(msg)    #=> "15551234567@s.whatsapp.net" — sender JID
   """
 
-  alias Irish.MessageKey
+  alias Irish.{MessageKey, Coerce}
 
   defstruct [
     :key,
@@ -68,13 +68,13 @@ defmodule Irish.Message do
     %__MODULE__{
       key: parse_key(data["key"]),
       message: data["message"],
-      message_timestamp: coerce_timestamp(data["messageTimestamp"]),
+      message_timestamp: Coerce.int(data["messageTimestamp"]),
       status: Map.get(@status_map, data["status"]),
-      participant: data["participant"],
+      participant: Coerce.string(data["participant"]),
       push_name: data["pushName"],
-      broadcast: data["broadcast"] == true,
-      starred: data["starred"] == true,
-      message_stub_type: data["messageStubType"],
+      broadcast: Coerce.bool(data["broadcast"]),
+      starred: Coerce.bool(data["starred"]),
+      message_stub_type: Coerce.int(data["messageStubType"]),
       message_stub_parameters: data["messageStubParameters"]
     }
   end
@@ -140,13 +140,4 @@ defmodule Irish.Message do
   defp parse_key(nil), do: nil
   defp parse_key(map) when is_map(map), do: MessageKey.from_raw(map)
 
-  defp coerce_timestamp(ts) when is_binary(ts) do
-    case Integer.parse(ts) do
-      {int, _} -> int
-      :error -> nil
-    end
-  end
-
-  defp coerce_timestamp(ts) when is_integer(ts), do: ts
-  defp coerce_timestamp(_), do: nil
 end

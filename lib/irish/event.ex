@@ -9,23 +9,32 @@ defmodule Irish.Event do
 
   | Event | Output shape |
   |---|---|
-  | `"messages.upsert"` | `%{messages: [%Message{}], type: :notify \| :append}` |
-  | `"messages.update"` | `[%{key: %MessageKey{}, update: map}]` |
-  | `"messages.delete"` | `%{keys: [%MessageKey{}]}` |
-  | `"messages.reaction"` | `[%{key: %MessageKey{}, reaction: map}]` |
-  | `"message-receipt.update"` | `[%{key: %MessageKey{}, receipt: map}]` |
+  | `"messages.upsert"` | `%MessagesUpsert{messages: [%Message{}], type: :notify \| :append}` |
+  | `"messages.update"` | `[%MessagesUpdate{key: %MessageKey{}, update: map}]` |
+  | `"messages.delete"` | `%MessagesDelete{keys: [%MessageKey{}]}` |
+  | `"messages.reaction"` | `[%MessagesReaction{key: %MessageKey{}, reaction: map}]` |
+  | `"message-receipt.update"` | `[%MessageReceiptUpdate{key: %MessageKey{}, receipt: map}]` |
   | `"contacts.upsert"` | `[%Contact{}]` |
   | `"contacts.update"` | `[%Contact{}]` |
   | `"chats.upsert"` | `[%Chat{}]` |
   | `"chats.update"` | `[%Chat{}]` |
   | `"groups.upsert"` | `[%Group{}]` |
   | `"groups.update"` | `[%Group{}]` |
-  | `"presence.update"` | `%{id: jid, presences: %{jid => %Presence{}}}` |
+  | `"presence.update"` | `%PresenceUpdate{id: jid, presences: %{jid => %Presence{}}}` |
   | `"call"` | `[%Call{}]` |
   | Other events | Passthrough unchanged |
   """
 
   alias Irish.{Message, MessageKey, Contact, Chat, Call, Group, Presence}
+
+  alias Irish.Event.{
+    MessagesUpsert,
+    MessagesUpdate,
+    MessagesDelete,
+    MessagesReaction,
+    MessageReceiptUpdate,
+    PresenceUpdate
+  }
 
   @doc "Convert raw event data to structs for known event types. Unknown events pass through."
   @spec convert(String.t(), any()) :: any()
@@ -37,28 +46,41 @@ defmodule Irish.Event do
         other -> other
       end
 
-    %{messages: Enum.map(msgs, &Message.from_raw/1), type: type}
+    %MessagesUpsert{
+      messages: Enum.map(msgs, &Message.from_raw/1),
+      type: type,
+      request_id: data["requestTag"]
+    }
   end
 
   def convert("messages.update", updates) when is_list(updates) do
     Enum.map(updates, fn item ->
-      %{key: MessageKey.from_raw(item["key"]), update: Map.delete(item, "key")}
+      %MessagesUpdate{
+        key: MessageKey.from_raw(item["key"]),
+        update: Map.delete(item, "key")
+      }
     end)
   end
 
   def convert("messages.delete", %{"keys" => keys}) do
-    %{keys: Enum.map(keys, &MessageKey.from_raw/1)}
+    %MessagesDelete{keys: Enum.map(keys, &MessageKey.from_raw/1)}
   end
 
   def convert("messages.reaction", reactions) when is_list(reactions) do
     Enum.map(reactions, fn item ->
-      %{key: MessageKey.from_raw(item["key"]), reaction: Map.delete(item, "key")}
+      %MessagesReaction{
+        key: MessageKey.from_raw(item["key"]),
+        reaction: Map.delete(item, "key")
+      }
     end)
   end
 
   def convert("message-receipt.update", receipts) when is_list(receipts) do
     Enum.map(receipts, fn item ->
-      %{key: MessageKey.from_raw(item["key"]), receipt: Map.delete(item, "key")}
+      %MessageReceiptUpdate{
+        key: MessageKey.from_raw(item["key"]),
+        receipt: Map.delete(item, "key")
+      }
     end)
   end
 
@@ -87,7 +109,7 @@ defmodule Irish.Event do
   end
 
   def convert("presence.update", %{"id" => id, "presences" => presences}) when is_map(presences) do
-    %{
+    %PresenceUpdate{
       id: id,
       presences: Map.new(presences, fn {jid, raw} -> {jid, Presence.from_raw(raw)} end)
     }

@@ -32,16 +32,18 @@ defmodule Irish.Group do
   @doc "Build a Group struct from a raw Baileys GroupMetadata map."
   @spec from_raw(map()) :: t()
   def from_raw(data) when is_map(data) do
+    alias Irish.Coerce
+
     %__MODULE__{
       id: data["id"],
       subject: data["subject"],
       owner: data["owner"],
       description: data["desc"],
-      creation: data["creation"],
-      size: data["size"],
-      announce: data["announce"] == true,
-      restrict: data["restrict"] == true,
-      is_community: data["isCommunity"] == true,
+      creation: Coerce.int(data["creation"]),
+      size: Coerce.non_neg_int(data["size"]),
+      announce: Coerce.bool(data["announce"]),
+      restrict: Coerce.bool(data["restrict"]),
+      is_community: Coerce.bool(data["isCommunity"]),
       participants: parse_participants(data["participants"])
     }
   end

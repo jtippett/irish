@@ -47,7 +47,7 @@ defmodule Irish.Call do
           is_group: boolean(),
           group_jid: String.t() | nil,
           id: String.t() | nil,
-          date: any(),
+          date: integer() | nil,
           is_video: boolean(),
           status: status_atom() | nil,
           offline: boolean(),
@@ -66,17 +66,19 @@ defmodule Irish.Call do
   @doc "Build a Call from a raw Baileys call map."
   @spec from_raw(map()) :: t()
   def from_raw(data) when is_map(data) do
+    alias Irish.Coerce
+
     %__MODULE__{
       chat_id: data["chatId"],
       from: data["from"],
-      is_group: data["isGroup"] == true,
+      is_group: Coerce.bool(data["isGroup"]),
       group_jid: data["groupJid"],
       id: data["id"],
-      date: data["date"],
-      is_video: data["isVideo"] == true,
+      date: Coerce.int(data["date"]),
+      is_video: Coerce.bool(data["isVideo"]),
       status: Map.get(@status_map, data["status"]),
-      offline: data["offline"] == true,
-      latency_ms: data["latencyMs"]
+      offline: Coerce.bool(data["offline"]),
+      latency_ms: Coerce.int(data["latencyMs"])
     }
   end
 end

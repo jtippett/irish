@@ -53,17 +53,19 @@ defmodule Irish.Chat do
   @doc "Build a Chat from a raw Baileys chat map."
   @spec from_raw(map()) :: t()
   def from_raw(data) when is_map(data) do
+    alias Irish.Coerce
+
     %__MODULE__{
       id: data["id"],
       name: data["name"],
-      conversation_timestamp: data["conversationTimestamp"],
-      unread_count: data["unreadCount"],
-      last_message_recv_timestamp: data["lastMessageRecvTimestamp"],
-      archived: data["archived"] == true,
-      pinned: data["pinned"],
-      mute_end_time: data["muteEndTime"],
-      read_only: data["readOnly"] == true,
-      marked_as_unread: data["markedAsUnread"] == true,
+      conversation_timestamp: Coerce.int(data["conversationTimestamp"]),
+      unread_count: Coerce.non_neg_int(data["unreadCount"]),
+      last_message_recv_timestamp: Coerce.int(data["lastMessageRecvTimestamp"]),
+      archived: Coerce.bool(data["archived"]),
+      pinned: Coerce.int(data["pinned"]),
+      mute_end_time: Coerce.int(data["muteEndTime"]),
+      read_only: Coerce.bool(data["readOnly"]),
+      marked_as_unread: Coerce.bool(data["markedAsUnread"]),
       display_name: data["displayName"]
     }
   end
