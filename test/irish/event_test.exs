@@ -147,20 +147,27 @@ defmodule Irish.EventTest do
         "id" => "chat@g.us",
         "presences" => %{
           "user1@s.whatsapp.net" => %{"lastKnownPresence" => "composing"},
-          "user2@s.whatsapp.net" => %{"lastKnownPresence" => "available", "lastSeen" => 1_700_000_000}
+          "user2@s.whatsapp.net" => %{
+            "lastKnownPresence" => "available",
+            "lastSeen" => 1_700_000_000
+          }
         }
       }
 
       result = Event.convert("presence.update", raw)
       assert result.id == "chat@g.us"
       assert %Presence{last_known_presence: :composing} = result.presences["user1@s.whatsapp.net"]
-      assert %Presence{last_known_presence: :available, last_seen: 1_700_000_000} = result.presences["user2@s.whatsapp.net"]
+
+      assert %Presence{last_known_presence: :available, last_seen: 1_700_000_000} =
+               result.presences["user2@s.whatsapp.net"]
     end
   end
 
   describe "call" do
     test "converts call list" do
-      raw = [%{"id" => "call1", "from" => "x@s.whatsapp.net", "status" => "offer", "isVideo" => true}]
+      raw = [
+        %{"id" => "call1", "from" => "x@s.whatsapp.net", "status" => "offer", "isVideo" => true}
+      ]
 
       [call] = Event.convert("call", raw)
       assert %Call{id: "call1", status: :offer, is_video: true} = call

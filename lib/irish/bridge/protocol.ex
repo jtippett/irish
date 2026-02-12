@@ -10,7 +10,8 @@ defmodule Irish.Bridge.Protocol do
   @version 1
 
   @doc "Encode a command request as a JSON string with version envelope."
-  @spec encode_request(String.t(), String.t(), map()) :: {:ok, String.t()} | {:error, Jason.EncodeError.t()}
+  @spec encode_request(String.t(), String.t(), map()) ::
+          {:ok, String.t()} | {:error, Jason.EncodeError.t()}
   def encode_request(id, cmd, args) when is_binary(id) and is_binary(cmd) and is_map(args) do
     Jason.encode(%{v: @version, id: id, cmd: cmd, args: args})
   end

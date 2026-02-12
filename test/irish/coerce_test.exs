@@ -31,7 +31,7 @@ defmodule Irish.CoerceTest do
     end
 
     test "float is truncated" do
-      assert Coerce.int(1700000000.5) == 1_700_000_000
+      assert Coerce.int(1_700_000_000.5) == 1_700_000_000
     end
 
     test "nil returns nil" do

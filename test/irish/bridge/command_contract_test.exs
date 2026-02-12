@@ -61,7 +61,8 @@ defmodule Irish.Bridge.CommandContractTest do
   end
 
   test "command error includes structured envelope", %{conn: conn} do
-    assert {:error, %{"code" => "test_error", "message" => "something went wrong", "details" => %{}}} =
+    assert {:error,
+            %{"code" => "test_error", "message" => "something went wrong", "details" => %{}}} =
              Connection.command(conn, "test_error", %{}, 2_000)
   end
 end

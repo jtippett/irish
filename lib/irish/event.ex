@@ -108,7 +108,8 @@ defmodule Irish.Event do
     Enum.map(groups, &Group.from_raw/1)
   end
 
-  def convert("presence.update", %{"id" => id, "presences" => presences}) when is_map(presences) do
+  def convert("presence.update", %{"id" => id, "presences" => presences})
+      when is_map(presences) do
     %PresenceUpdate{
       id: id,
       presences: Map.new(presences, fn {jid, raw} -> {jid, Presence.from_raw(raw)} end)

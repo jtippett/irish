@@ -58,6 +58,11 @@ defmodule Irish do
   alias Irish.{MessageKey, Message}
 
   @type conn :: GenServer.server()
+  @type jid :: String.t()
+  @type receipt_type :: String.t()
+
+  @valid_receipt_types ~w(read read-self played)
+  @jid_suffixes ~w(@s.whatsapp.net @g.us @broadcast @lid @newsletter)
 
   @spec child_spec(keyword()) :: Supervisor.child_spec()
   def child_spec(opts) do
@@ -75,11 +80,17 @@ defmodule Irish do
   # -- Messaging --
 
   @doc "Send a message. Content is a map matching Baileys' AnyMessageContent. Returns `{:ok, %Irish.Message{}}` on success."
-  @spec send_message(conn(), String.t(), map(), map()) :: {:ok, Message.t()} | {:error, any()}
+  @spec send_message(conn(), jid(), map(), map()) :: {:ok, Message.t()} | {:error, any()}
   def send_message(conn, jid, content, opts \\ %{}) do
-    case Irish.Connection.command(conn, "send_message", %{jid: jid, content: content, options: opts}) do
-      {:ok, data} when is_map(data) -> {:ok, Message.from_raw(data)}
-      other -> other
+    with :ok <- validate_jid(jid) do
+      case Irish.Connection.command(conn, "send_message", %{
+             jid: jid,
+             content: content,
+             options: opts
+           }) do
+        {:ok, data} when is_map(data) -> {:ok, Message.from_raw(data)}
+        other -> other
+      end
     end
   end
 
@@ -96,9 +107,11 @@ defmodule Irish do
   end
 
   @doc "Subscribe to presence updates for a JID."
-  @spec presence_subscribe(conn(), String.t()) :: {:ok, any()} | {:error, any()}
+  @spec presence_subscribe(conn(), jid()) :: {:ok, any()} | {:error, any()}
   def presence_subscribe(conn, jid) do
-    Irish.Connection.command(conn, "presence_subscribe", %{jid: jid})
+    with :ok <- validate_jid(jid) do
+      Irish.Connection.command(conn, "presence_subscribe", %{jid: jid})
+    end
   end
 
   @doc """
@@ -108,13 +121,15 @@ defmodule Irish do
 
       Irish.react(conn, "123@s.whatsapp.net", message_key, "👍")
   """
-  @spec react(conn(), String.t(), MessageKey.t() | map(), String.t()) :: {:ok, Message.t()} | {:error, any()}
+  @spec react(conn(), String.t(), MessageKey.t() | map(), String.t()) ::
+          {:ok, Message.t()} | {:error, any()}
   def react(conn, jid, message_key, emoji) do
     send_message(conn, jid, %{react: %{text: emoji, key: normalize_key(message_key)}})
   end
 
   @doc "Remove a reaction from a message. Accepts `%Irish.MessageKey{}` or a raw map."
-  @spec unreact(conn(), String.t(), MessageKey.t() | map()) :: {:ok, Message.t()} | {:error, any()}
+  @spec unreact(conn(), String.t(), MessageKey.t() | map()) ::
+          {:ok, Message.t()} | {:error, any()}
   def unreact(conn, jid, message_key) do
     react(conn, jid, message_key, "")
   end
@@ -124,9 +139,12 @@ defmodule Irish do
 
   Type can be `"read"`, `"read-self"`, or `"played"`.
   """
-  @spec send_receipts(conn(), [MessageKey.t() | map()], String.t()) :: {:ok, any()} | {:error, any()}
+  @spec send_receipts(conn(), [MessageKey.t() | map()], receipt_type()) ::
+          {:ok, any()} | {:error, any()}
   def send_receipts(conn, keys, type) do
-    Irish.Connection.command(conn, "send_receipts", %{keys: normalize_keys(keys), type: type})
+    with :ok <- validate_receipt_type(type) do
+      Irish.Connection.command(conn, "send_receipts", %{keys: normalize_keys(keys), type: type})
+    end
   end
 
   # -- Media --
@@ -207,9 +225,14 @@ defmodule Irish do
   @doc "Create a group. Returns `{:ok, %Irish.Group{}}` on success."
   @spec group_create(conn(), String.t(), [String.t()]) :: {:ok, Irish.Group.t()} | {:error, any()}
   def group_create(conn, subject, participants) do
-    case Irish.Connection.command(conn, "group_create", %{subject: subject, participants: participants}) do
-      {:ok, data} -> {:ok, Irish.Group.from_raw(data)}
-      error -> error
+    with :ok <- validate_non_empty_list(participants, :empty_participants) do
+      case Irish.Connection.command(conn, "group_create", %{
+             subject: subject,
+             participants: participants
+           }) do
+        {:ok, data} -> {:ok, Irish.Group.from_raw(data)}
+        error -> error
+      end
     end
   end
 
@@ -222,18 +245,24 @@ defmodule Irish do
   @doc "Update group description."
   @spec group_update_description(conn(), String.t(), String.t()) :: {:ok, any()} | {:error, any()}
   def group_update_description(conn, jid, description) do
-    Irish.Connection.command(conn, "group_update_description", %{jid: jid, description: description})
+    Irish.Connection.command(conn, "group_update_description", %{
+      jid: jid,
+      description: description
+    })
   end
 
   @doc "Add/remove/promote/demote group participants."
-  @spec group_participants_update(conn(), String.t(), [String.t()], String.t()) :: {:ok, any()} | {:error, any()}
+  @spec group_participants_update(conn(), jid(), [String.t()], String.t()) ::
+          {:ok, any()} | {:error, any()}
   def group_participants_update(conn, jid, participants, action)
       when action in ~w(add remove promote demote) do
-    Irish.Connection.command(conn, "group_participants_update", %{
-      jid: jid,
-      participants: participants,
-      action: action
-    })
+    with :ok <- validate_non_empty_list(participants, :empty_participants) do
+      Irish.Connection.command(conn, "group_participants_update", %{
+        jid: jid,
+        participants: participants,
+        action: action
+      })
+    end
   end
 
   @doc "Get group invite code."
@@ -312,7 +341,8 @@ defmodule Irish do
   end
 
   @doc "Approve or reject pending join requests. Action: `\"approve\"` or `\"reject\"`."
-  @spec group_request_participants_update(conn(), String.t(), [String.t()], String.t()) :: {:ok, any()} | {:error, any()}
+  @spec group_request_participants_update(conn(), String.t(), [String.t()], String.t()) ::
+          {:ok, any()} | {:error, any()}
   def group_request_participants_update(conn, jid, participants, action)
       when action in ~w(approve reject) do
     Irish.Connection.command(conn, "group_request_participants_update", %{
@@ -373,7 +403,8 @@ defmodule Irish do
   # -- Auth --
 
   @doc "Request a pairing code for phone-number-based login (no QR scan needed)."
-  @spec request_pairing_code(conn(), String.t(), String.t() | nil) :: {:ok, any()} | {:error, any()}
+  @spec request_pairing_code(conn(), String.t(), String.t() | nil) ::
+          {:ok, any()} | {:error, any()}
   def request_pairing_code(conn, phone_number, custom_code \\ nil) do
     Irish.Connection.command(conn, "request_pairing_code", %{
       phone_number: phone_number,
@@ -395,4 +426,20 @@ defmodule Irish do
   defp normalize_keys(keys) when is_list(keys), do: Enum.map(keys, &normalize_key/1)
 
   defp encode_binary(data) when is_binary(data), do: %{"__b64" => Base.encode64(data)}
+
+  # -- Validators --
+
+  defp validate_jid(jid) when is_binary(jid) do
+    if Enum.any?(@jid_suffixes, &String.ends_with?(jid, &1)),
+      do: :ok,
+      else: {:error, :invalid_jid}
+  end
+
+  defp validate_jid(_), do: {:error, :invalid_jid}
+
+  defp validate_receipt_type(type) when type in @valid_receipt_types, do: :ok
+  defp validate_receipt_type(_), do: {:error, :invalid_receipt_type}
+
+  defp validate_non_empty_list([_ | _], _error), do: :ok
+  defp validate_non_empty_list(_, error), do: {:error, error}
 end

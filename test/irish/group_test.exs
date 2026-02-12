@@ -15,7 +15,11 @@ defmodule Irish.GroupTest do
     "restrict" => false,
     "isCommunity" => false,
     "participants" => [
-      %{"admin" => nil, "id" => "8074605666368@lid", "phoneNumber" => "66917439845@s.whatsapp.net"},
+      %{
+        "admin" => nil,
+        "id" => "8074605666368@lid",
+        "phoneNumber" => "66917439845@s.whatsapp.net"
+      },
       %{
         "admin" => "superadmin",
         "id" => "262096201719887@lid",
@@ -51,7 +55,13 @@ defmodule Irish.GroupTest do
     end
 
     test "coerces announce/restrict/isCommunity to boolean" do
-      group = Group.from_raw(%{"id" => "x@g.us", "announce" => true, "restrict" => true, "isCommunity" => true})
+      group =
+        Group.from_raw(%{
+          "id" => "x@g.us",
+          "announce" => true,
+          "restrict" => true,
+          "isCommunity" => true
+        })
 
       assert group.announce == true
       assert group.restrict == true
@@ -61,7 +71,12 @@ defmodule Irish.GroupTest do
 
   describe "Participant.from_raw/1" do
     test "parses participant fields" do
-      p = Participant.from_raw(%{"id" => "123@lid", "phoneNumber" => "123@s.whatsapp.net", "admin" => "superadmin"})
+      p =
+        Participant.from_raw(%{
+          "id" => "123@lid",
+          "phoneNumber" => "123@s.whatsapp.net",
+          "admin" => "superadmin"
+        })
 
       assert %Participant{} = p
       assert p.id == "123@lid"

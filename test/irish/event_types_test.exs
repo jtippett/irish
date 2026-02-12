@@ -49,9 +49,13 @@ defmodule Irish.Event.TypesTest do
 
   describe "presence.update struct" do
     test "returns PresenceUpdate struct" do
-      raw = %{"id" => "x@s.whatsapp.net", "presences" => %{
-        "y@s.whatsapp.net" => %{"lastKnownPresence" => "available"}
-      }}
+      raw = %{
+        "id" => "x@s.whatsapp.net",
+        "presences" => %{
+          "y@s.whatsapp.net" => %{"lastKnownPresence" => "available"}
+        }
+      }
+
       result = Event.convert("presence.update", raw)
 
       assert %Irish.Event.PresenceUpdate{} = result

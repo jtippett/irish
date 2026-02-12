@@ -65,6 +65,13 @@ defmodule Irish.Connection do
 
     struct_events = Keyword.get(opts, :struct_events, true)
 
+    if struct_events == false do
+      Logger.warning(
+        "[Irish] struct_events: false is deprecated and will be removed in a future release. " <>
+          "Use struct_events: true (the default) and pattern match on event structs instead."
+      )
+    end
+
     state = %__MODULE__{
       port: port,
       handler: handler,
@@ -86,10 +93,17 @@ defmodule Irish.Connection do
   def handle_call({:command, cmd, args, timeout}, from, state) do
     actual_timeout = if timeout == :default, do: state.timeout, else: timeout
     id = gen_id()
+    start_time = System.monotonic_time()
+
+    :telemetry.execute([:irish, :command, :start], %{system_time: System.system_time()}, %{
+      cmd: cmd,
+      id: id
+    })
+
     {:ok, payload} = Irish.Bridge.Protocol.encode_request(id, cmd, args)
     Port.command(state.port, payload <> "\n")
     timer = Process.send_after(self(), {:cmd_timeout, id}, actual_timeout)
-    {:noreply, put_in(state.pending[id], {from, timer})}
+    {:noreply, put_in(state.pending[id], {from, timer, cmd, start_time})}
   end
 
   @impl true
@@ -100,7 +114,9 @@ defmodule Irish.Connection do
     state =
       Enum.reduce(lines, %{state | buffer: rest}, fn line, acc ->
         case Jason.decode(line) do
-          {:ok, msg} -> dispatch(msg, acc)
+          {:ok, msg} ->
+            dispatch(msg, acc)
+
           {:error, _} ->
             Logger.warning("[Irish] bad bridge output: #{String.slice(line, 0..200)}")
             acc
@@ -118,12 +134,21 @@ defmodule Irish.Connection do
 
   def handle_info({port, {:exit_status, code}}, %{port: port} = state) do
     Logger.error("[Irish] bridge exited with code #{code}")
+    :telemetry.execute([:irish, :bridge, :exit], %{}, %{exit_status: code})
     {:stop, {:bridge_exit, code}, state}
   end
 
   def handle_info({:cmd_timeout, id}, state) do
     case Map.pop(state.pending, id) do
-      {{from, _timer}, pending} ->
+      {{from, _timer, cmd, start_time}, pending} ->
+        duration = System.monotonic_time() - start_time
+
+        :telemetry.execute([:irish, :command, :stop], %{duration: duration}, %{
+          cmd: cmd,
+          id: id,
+          result: :timeout
+        })
+
         GenServer.reply(from, {:error, :timeout})
         {:noreply, %{state | pending: pending}}
 
@@ -179,7 +204,16 @@ defmodule Irish.Connection do
           :binary,
           :use_stdio,
           :exit_status,
-          {:args, ["run", "--allow-net", "--allow-read", "--allow-write", "--allow-env", "--node-modules-dir=manual", bridge_path]},
+          {:args,
+           [
+             "run",
+             "--allow-net",
+             "--allow-read",
+             "--allow-write",
+             "--allow-env",
+             "--node-modules-dir=manual",
+             bridge_path
+           ]},
           {:cd, bridge_dir}
         ])
     end
@@ -201,13 +235,20 @@ defmodule Irish.Connection do
 
   # -- Dispatch responses & events --
 
-  defp dispatch(%{"id" => id, "ok" => true, "data" => data}, %{init_id: id, initialized: false} = state) do
+  defp dispatch(
+         %{"id" => id, "ok" => true, "data" => data},
+         %{init_id: id, initialized: false} = state
+       ) do
     Logger.info("[Irish] bridge initialized")
+
     %{state | initialized: true, init_id: nil}
     |> decode_and_ignore(data)
   end
 
-  defp dispatch(%{"id" => id, "ok" => false, "error" => err}, %{init_id: id, initialized: false} = state) do
+  defp dispatch(
+         %{"id" => id, "ok" => false, "error" => err},
+         %{init_id: id, initialized: false} = state
+       ) do
     Logger.error("[Irish] init failed: #{inspect(err)}")
     %{state | initialized: :stopping, stop_reason: {:init_failed, err}}
   end
@@ -221,6 +262,7 @@ defmodule Irish.Connection do
   end
 
   defp dispatch(%{"event" => event, "data" => data}, state) do
+    :telemetry.execute([:irish, :bridge, :event], %{}, %{event: event})
     decoded = decode_buffers(data)
     payload = if state.struct_events, do: Irish.Event.convert(event, decoded), else: decoded
     send(state.handler, {:wa, event, payload})
@@ -233,8 +275,17 @@ defmodule Irish.Connection do
 
   defp resolve(id, reply, state) do
     case Map.pop(state.pending, id) do
-      {{from, timer}, pending} ->
+      {{from, timer, cmd, start_time}, pending} ->
         Process.cancel_timer(timer)
+        duration = System.monotonic_time() - start_time
+        result = if match?({:ok, _}, reply), do: :ok, else: :error
+
+        :telemetry.execute([:irish, :command, :stop], %{duration: duration}, %{
+          cmd: cmd,
+          id: id,
+          result: result
+        })
+
         GenServer.reply(from, reply)
         %{state | pending: pending}
 
@@ -269,7 +320,10 @@ defmodule Irish.Connection do
 
   # Recursively decode {"__b64": "…"} maps back into Elixir binaries.
   defp decode_buffers(%{"__b64" => b64}) when is_binary(b64), do: Base.decode64!(b64)
-  defp decode_buffers(map) when is_map(map), do: Map.new(map, fn {k, v} -> {k, decode_buffers(v)} end)
+
+  defp decode_buffers(map) when is_map(map),
+    do: Map.new(map, fn {k, v} -> {k, decode_buffers(v)} end)
+
   defp decode_buffers(list) when is_list(list), do: Enum.map(list, &decode_buffers/1)
   defp decode_buffers(other), do: other
 end

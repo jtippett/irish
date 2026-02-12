@@ -49,5 +49,7 @@ defmodule Irish.Group do
   end
 
   defp parse_participants(nil), do: []
-  defp parse_participants(list) when is_list(list), do: Enum.map(list, &Irish.Group.Participant.from_raw/1)
+
+  defp parse_participants(list) when is_list(list),
+    do: Enum.map(list, &Irish.Group.Participant.from_raw/1)
 end

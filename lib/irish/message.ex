@@ -60,7 +60,14 @@ defmodule Irish.Message do
           message_stub_parameters: [String.t()] | nil
         }
 
-  @status_map %{0 => :error, 1 => :pending, 2 => :server_ack, 3 => :delivery_ack, 4 => :read, 5 => :played}
+  @status_map %{
+    0 => :error,
+    1 => :pending,
+    2 => :server_ack,
+    3 => :delivery_ack,
+    4 => :read,
+    5 => :played
+  }
 
   @doc "Build a Message from a raw Baileys WebMessageInfo map."
   @spec from_raw(map()) :: t()
@@ -139,5 +146,4 @@ defmodule Irish.Message do
 
   defp parse_key(nil), do: nil
   defp parse_key(map) when is_map(map), do: MessageKey.from_raw(map)
-
 end

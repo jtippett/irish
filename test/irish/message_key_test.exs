@@ -49,7 +49,13 @@ defmodule Irish.MessageKeyTest do
     end
 
     test "omits participant when nil" do
-      key = MessageKey.from_raw(%{"remoteJid" => "x@s.whatsapp.net", "fromMe" => false, "id" => "abc"})
+      key =
+        MessageKey.from_raw(%{
+          "remoteJid" => "x@s.whatsapp.net",
+          "fromMe" => false,
+          "id" => "abc"
+        })
+
       raw = MessageKey.to_raw(key)
 
       assert raw == %{"remoteJid" => "x@s.whatsapp.net", "fromMe" => false, "id" => "abc"}

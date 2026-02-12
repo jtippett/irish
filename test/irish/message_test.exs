@@ -46,7 +46,14 @@ defmodule Irish.MessageTest do
     end
 
     test "maps all status codes" do
-      for {code, atom} <- [{0, :error}, {1, :pending}, {2, :server_ack}, {3, :delivery_ack}, {4, :read}, {5, :played}] do
+      for {code, atom} <- [
+            {0, :error},
+            {1, :pending},
+            {2, :server_ack},
+            {3, :delivery_ack},
+            {4, :read},
+            {5, :played}
+          ] do
         msg = Message.from_raw(%{"status" => code})
         assert msg.status == atom
       end
@@ -75,7 +82,7 @@ defmodule Irish.MessageTest do
     end
 
     test "coerces float timestamp" do
-      msg = Message.from_raw(%{"messageTimestamp" => 1700000000.5})
+      msg = Message.from_raw(%{"messageTimestamp" => 1_700_000_000.5})
       assert msg.message_timestamp == 1_700_000_000
     end
 
@@ -102,7 +109,9 @@ defmodule Irish.MessageTest do
     end
 
     test "extracts extendedTextMessage text" do
-      msg = Message.from_raw(%{"message" => %{"extendedTextMessage" => %{"text" => "Quoted reply"}}})
+      msg =
+        Message.from_raw(%{"message" => %{"extendedTextMessage" => %{"text" => "Quoted reply"}}})
+
       assert Message.text(msg) == "Quoted reply"
     end
 
@@ -235,7 +244,13 @@ defmodule Irish.MessageTest do
 
   describe "media?/1" do
     test "true for image, video, audio, document, sticker" do
-      for type_key <- ["imageMessage", "videoMessage", "audioMessage", "documentMessage", "stickerMessage"] do
+      for type_key <- [
+            "imageMessage",
+            "videoMessage",
+            "audioMessage",
+            "documentMessage",
+            "stickerMessage"
+          ] do
         msg = Message.from_raw(%{"message" => %{type_key => %{}}})
         assert Message.media?(msg), "expected media? for #{type_key}"
       end
@@ -251,24 +266,30 @@ defmodule Irish.MessageTest do
 
   describe "from/1" do
     test "returns participant when present on message" do
-      msg = Message.from_raw(%{
-        "key" => %{"remoteJid" => "group@g.us"},
-        "participant" => "sender@s.whatsapp.net"
-      })
+      msg =
+        Message.from_raw(%{
+          "key" => %{"remoteJid" => "group@g.us"},
+          "participant" => "sender@s.whatsapp.net"
+        })
+
       assert Message.from(msg) == "sender@s.whatsapp.net"
     end
 
     test "returns key participant for group messages" do
-      msg = Message.from_raw(%{
-        "key" => %{"remoteJid" => "group@g.us", "participant" => "sender@s.whatsapp.net"}
-      })
+      msg =
+        Message.from_raw(%{
+          "key" => %{"remoteJid" => "group@g.us", "participant" => "sender@s.whatsapp.net"}
+        })
+
       assert Message.from(msg) == "sender@s.whatsapp.net"
     end
 
     test "returns remote_jid for 1:1 messages" do
-      msg = Message.from_raw(%{
-        "key" => %{"remoteJid" => "user@s.whatsapp.net", "fromMe" => false, "id" => "x"}
-      })
+      msg =
+        Message.from_raw(%{
+          "key" => %{"remoteJid" => "user@s.whatsapp.net", "fromMe" => false, "id" => "x"}
+        })
+
       assert Message.from(msg) == "user@s.whatsapp.net"
     end
 
