@@ -45,7 +45,13 @@ defmodule Irish.Connection do
 
   @doc "Send a command to the bridge and wait for the response."
   def command(conn, cmd, args \\ %{}, timeout \\ :default) do
-    call_timeout = if timeout == :default, do: @default_timeout + 5_000, else: timeout + 5_000
+    call_timeout =
+      case timeout do
+        :default -> :infinity
+        :infinity -> :infinity
+        ms when is_integer(ms) and ms >= 0 -> ms + 5_000
+      end
+
     GenServer.call(conn, {:command, cmd, args, timeout}, call_timeout)
   end
 
@@ -91,7 +97,13 @@ defmodule Irish.Connection do
   end
 
   def handle_call({:command, cmd, args, timeout}, from, state) do
-    actual_timeout = if timeout == :default, do: state.timeout, else: timeout
+    actual_timeout =
+      case timeout do
+        :default -> state.timeout
+        :infinity -> :infinity
+        ms -> ms
+      end
+
     id = gen_id()
     start_time = System.monotonic_time()
 
@@ -102,7 +114,12 @@ defmodule Irish.Connection do
 
     {:ok, payload} = Irish.Bridge.Protocol.encode_request(id, cmd, args)
     Port.command(state.port, payload <> "\n")
-    timer = Process.send_after(self(), {:cmd_timeout, id}, actual_timeout)
+
+    timer =
+      if actual_timeout == :infinity,
+        do: nil,
+        else: Process.send_after(self(), {:cmd_timeout, id}, actual_timeout)
+
     {:noreply, put_in(state.pending[id], {from, timer, cmd, start_time})}
   end
 
@@ -113,11 +130,15 @@ defmodule Irish.Connection do
 
     state =
       Enum.reduce(lines, %{state | buffer: rest}, fn line, acc ->
-        case Jason.decode(line) do
+        case Irish.Bridge.Protocol.decode_line(line) do
           {:ok, msg} ->
             dispatch(msg, acc)
 
-          {:error, _} ->
+          {:error, :unsupported_version} ->
+            Logger.error("[Irish] unsupported bridge protocol version")
+            %{acc | initialized: :stopping, stop_reason: {:protocol_error, :unsupported_version}}
+
+          {:error, :invalid_json} ->
             Logger.warning("[Irish] bad bridge output: #{String.slice(line, 0..200)}")
             acc
         end
@@ -276,7 +297,7 @@ defmodule Irish.Connection do
   defp resolve(id, reply, state) do
     case Map.pop(state.pending, id) do
       {{from, timer, cmd, start_time}, pending} ->
-        Process.cancel_timer(timer)
+        if timer, do: Process.cancel_timer(timer)
         duration = System.monotonic_time() - start_time
         result = if match?({:ok, _}, reply), do: :ok, else: :error
 

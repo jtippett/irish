@@ -79,6 +79,39 @@ defmodule Irish.Connection.ProtocolIntegrationTest do
     assert_receive {:wa, "test.event", %{"hello" => "world"}}, 1_000
   end
 
+  test "supports :infinity call timeout without crashing", %{conn: conn} do
+    assert {:ok, %{"key" => "value"}} =
+             Connection.command(conn, "echo", %{key: "value"}, :infinity)
+  end
+
+  test "unsupported protocol version stops connection" do
+    script = ~S"""
+    #!/usr/bin/env bash
+    read -r line
+    id=$(echo "$line" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+    echo "{\"v\":99,\"id\":\"$id\",\"ok\":true,\"data\":{\"status\":\"initialized\"}}"
+    sleep 86400
+    """
+
+    dir = System.tmp_dir!() |> Path.join("irish_bad_proto_#{:rand.uniform(100_000)}")
+    File.mkdir_p!(dir)
+    path = Path.join(dir, "bad_proto.sh")
+    File.write!(path, script)
+    File.chmod!(path, 0o755)
+    on_exit(fn -> File.rm_rf!(dir) end)
+
+    Process.flag(:trap_exit, true)
+
+    {:ok, pid} =
+      Connection.start_link(
+        handler: self(),
+        auth_dir: System.tmp_dir!(),
+        bridge_cmd: {"bash", [path]}
+      )
+
+    assert_receive {:EXIT, ^pid, {:protocol_error, :unsupported_version}}, 5_000
+  end
+
   test "event conversion respects struct_events: false option" do
     {:ok, pid} = Irish.Test.FakeBridge.start_connection(struct_events: false)
 
