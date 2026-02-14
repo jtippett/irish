@@ -232,6 +232,7 @@ defmodule Irish.Connection do
              "--allow-read",
              "--allow-write",
              "--allow-env",
+             "--allow-sys=hostname",
              "--node-modules-dir=manual",
              bridge_path
            ]},

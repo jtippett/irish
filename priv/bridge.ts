@@ -68,6 +68,27 @@ function makeLogger(level = "warn"): Logger {
 
 const logger = makeLogger("warn");
 
+// Redirect console.* to stderr — Baileys' Signal layer uses console.log
+// directly (bypassing the logger), which would pollute the stdout JSON protocol.
+{
+  const ce = new TextEncoder();
+  const stderrWrite = (prefix: string) => (...args: unknown[]) => {
+    const parts = args.map((a) => typeof a === "string" ? a : JSON.stringify(a));
+    try {
+      Deno.stderr.writeSync(ce.encode(`[${prefix}] ${parts.join(" ")}\n`));
+    } catch { /* stderr broken */ }
+  };
+  // deno-lint-ignore no-global-assign
+  console = {
+    ...console,
+    log: stderrWrite("LOG"),
+    info: stderrWrite("INFO"),
+    warn: stderrWrite("WARN"),
+    error: stderrWrite("ERROR"),
+    debug: stderrWrite("DEBUG"),
+  };
+}
+
 // ---------------------------------------------------------------------------
 // JSON serialization — handles Buffer / Uint8Array / BigInt
 // ---------------------------------------------------------------------------
