@@ -5,7 +5,7 @@ defmodule Irish.MixProject do
     [
       app: :irish,
       version: "0.1.0",
-      elixir: "~> 1.19",
+      elixir: "~> 1.18",
       start_permanent: Mix.env() == :prod,
       elixirc_paths: elixirc_paths(Mix.env()),
       deps: deps(),
@@ -37,7 +37,13 @@ defmodule Irish.MixProject do
   defp docs do
     [
       main: "readme",
-      extras: ["README.md", "CHANGELOG.md", "guides/events.md"],
+      extras: [
+        "README.md",
+        "CHANGELOG.md",
+        "guides/integration.md",
+        "guides/common-patterns.md",
+        "guides/events.md"
+      ],
       groups_for_extras: [
         Guides: ~r/guides\/.*/
       ]
