@@ -13,7 +13,7 @@ Elixir GenServer  ──stdio──>  Deno (bridge.ts)  ──WebSocket──>  
 
 ## Prerequisites
 
-- **Elixir** >= 1.15
+- **Elixir** >= 1.18
 - **Deno** >= 2.0 (`brew install deno` / [deno.land](https://deno.land))
 - **npm** (ships with Node.js — only needed to install Baileys once)
 
@@ -24,12 +24,21 @@ Add `irish` to your deps:
 ```elixir
 def deps do
   [
-    {:irish, path: "../irish"}   # or from hex/git once published
+    {:irish, "~> 1.0"}
   ]
 end
 ```
 
-npm dependencies are installed automatically the first time Irish starts.
+Then fetch deps and install the Baileys bridge:
+
+```bash
+mix deps.get
+mix irish.setup
+```
+
+`mix irish.setup` runs `npm install` inside Irish's `priv/` directory to fetch
+Baileys and its dependencies. You only need to run it once (and again after
+upgrading Irish).
 
 ## Quick start
 
@@ -386,6 +395,16 @@ WhatsApp socket and bridges it to Elixir over stdin/stdout:
 
 - **Auth state**: Managed by Baileys' `useMultiFileAuthState` inside the Deno
   process. Credentials are persisted to the `auth_dir` you configure.
+
+## Guides
+
+- [Building a GenServer Handler](guides/integration.md) — supervision,
+  connection lifecycle, reconnection, test mode
+- [Common Patterns](guides/common-patterns.md) — event filtering, message
+  processing, media downloads, groups, LID translation, error handling,
+  telemetry
+- [Event Reference](guides/events.md) — typed event structs, compatibility
+  policy
 
 ## License
 

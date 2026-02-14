@@ -4,11 +4,13 @@ defmodule Irish.MixProject do
   def project do
     [
       app: :irish,
-      version: "0.1.0",
+      version: "1.0.0",
       elixir: "~> 1.18",
       start_permanent: Mix.env() == :prod,
       elixirc_paths: elixirc_paths(Mix.env()),
       deps: deps(),
+      source_url: "https://github.com/jtippett/irish",
+      homepage_url: "https://github.com/jtippett/irish",
       description: "WhatsApp Web client for Elixir powered by Baileys",
       package: package(),
       docs: docs(),
@@ -29,8 +31,12 @@ defmodule Irish.MixProject do
   defp package do
     [
       licenses: ["MIT"],
-      links: %{"Baileys" => "https://github.com/WhiskeySockets/Baileys"},
-      files: ~w(lib priv mix.exs README.md LICENSE .formatter.exs)
+      links: %{
+        "GitHub" => "https://github.com/jtippett/irish",
+        "Baileys" => "https://github.com/WhiskeySockets/Baileys"
+      },
+      files: ~w(lib mix.exs README.md LICENSE .formatter.exs
+                priv/bridge.ts priv/package.json priv/package-lock.json priv/.npmrc)
     ]
   end
 

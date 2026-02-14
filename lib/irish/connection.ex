@@ -216,7 +216,7 @@ defmodule Irish.Connection do
         bridge_dir = :code.priv_dir(:irish) |> to_string()
         bridge_path = Path.join(bridge_dir, "bridge.ts")
 
-        ensure_npm_deps!(bridge_dir)
+        verify_npm_deps!(bridge_dir)
         File.mkdir_p!(Keyword.get(opts, :auth_dir, "wa_auth"))
 
         deno = System.find_executable("deno") || raise "deno not found in PATH"
@@ -325,18 +325,19 @@ defmodule Irish.Connection do
 
   defp gen_id, do: :crypto.strong_rand_bytes(12) |> Base.url_encode64(padding: false)
 
-  defp ensure_npm_deps!(bridge_dir) do
+  defp verify_npm_deps!(bridge_dir) do
     node_modules = Path.join(bridge_dir, "node_modules")
 
     unless File.exists?(node_modules) do
-      Logger.info("[Irish] Installing npm dependencies (first run)…")
+      raise """
+      Irish npm dependencies not installed.
 
-      case System.cmd("npm", ["install", "--prefix", bridge_dir, "--legacy-peer-deps"],
-             stderr_to_stdout: true
-           ) do
-        {_, 0} -> :ok
-        {out, code} -> raise "npm install failed (exit #{code}): #{out}"
-      end
+      Run:
+
+          mix irish.setup
+
+      This only needs to be done once (and again after upgrading Irish).
+      """
     end
   end
 
