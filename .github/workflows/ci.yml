@@ -50,6 +50,8 @@ jobs:
   quality:
     name: Quality checks
     runs-on: ubuntu-latest
+    env:
+      MIX_ENV: dev
     steps:
       - uses: actions/checkout@v4
 
