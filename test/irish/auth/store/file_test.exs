@@ -67,7 +67,8 @@ defmodule Irish.Auth.Store.FileTest do
                  dir: dir
                )
 
-      assert {:ok, ^value} = FileStore.get("pre-key", ["5"], dir: dir) |> elem(1) |> Map.fetch("5")
+      assert {:ok, ^value} =
+               FileStore.get("pre-key", ["5"], dir: dir) |> elem(1) |> Map.fetch("5")
     end
 
     test "deletes keys with nil value", %{tmp_dir: dir} do

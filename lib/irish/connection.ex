@@ -218,7 +218,24 @@ defmodule Irish.Connection do
 
         verify_npm_deps!(bridge_dir)
 
-        deno = System.find_executable("deno") || raise "deno not found in PATH"
+        deno =
+          System.find_executable("deno") ||
+            (
+              Logger.error("""
+
+
+              ======================================================
+                Deno not found in PATH!
+
+                Irish requires Deno >= 2.0 to run the Baileys bridge.
+
+                Install: brew install deno
+                Or see:  https://deno.land
+              ======================================================
+              """)
+
+              raise "deno not found in PATH"
+            )
 
         Port.open({:spawn_executable, deno}, [
           :binary,
@@ -402,15 +419,23 @@ defmodule Irish.Connection do
     node_modules = Path.join(bridge_dir, "node_modules")
 
     unless File.exists?(node_modules) do
-      raise """
-      Irish npm dependencies not installed.
+      msg = """
 
-      Run:
 
-          mix irish.setup
+      ======================================================
+        Irish npm dependencies not installed!
 
-      This only needs to be done once (and again after upgrading Irish).
+        Run:
+
+            mix irish.setup
+
+        This only needs to be done once (and again after
+        upgrading Irish).
+      ======================================================
       """
+
+      Logger.error(msg)
+      raise msg
     end
   end
 
