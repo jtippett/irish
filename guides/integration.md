@@ -27,7 +27,6 @@ defmodule MyApp.WhatsApp do
   @impl true
   def init(opts) do
     auth_dir = Keyword.get(opts, :auth_dir, "./data/whatsapp_auth")
-    File.mkdir_p!(auth_dir)
 
     {:ok, conn} = Irish.start_link(auth_dir: auth_dir, handler: self())
     ref = Process.monitor(conn)

@@ -43,4 +43,42 @@ defmodule Irish.Bridge.ProtocolTest do
       assert {:error, :invalid_json} = Protocol.decode_line("not json{}")
     end
   end
+
+  describe "encode_response/2" do
+    test "encodes success response" do
+      assert {:ok, json} = Protocol.encode_response("r1", {:ok, %{creds: "data"}})
+      decoded = Jason.decode!(json)
+      assert decoded["v"] == 1
+      assert decoded["id"] == "r1"
+      assert decoded["ok"] == true
+      assert decoded["data"] == %{"creds" => "data"}
+    end
+
+    test "encodes error response" do
+      assert {:ok, json} = Protocol.encode_response("r2", {:error, :not_found})
+      decoded = Jason.decode!(json)
+      assert decoded["v"] == 1
+      assert decoded["id"] == "r2"
+      assert decoded["ok"] == false
+      assert decoded["error"] == "not_found"
+    end
+  end
+
+  describe "message_type/1" do
+    test "classifies bridge requests" do
+      assert :request == Protocol.message_type(%{"req" => "auth.load_creds", "id" => "x"})
+    end
+
+    test "classifies command responses" do
+      assert :response == Protocol.message_type(%{"ok" => true, "id" => "x", "data" => %{}})
+    end
+
+    test "classifies events" do
+      assert :event == Protocol.message_type(%{"event" => "connection.update", "data" => %{}})
+    end
+
+    test "defaults unknown to event" do
+      assert :event == Protocol.message_type(%{"something" => "else"})
+    end
+  end
 end

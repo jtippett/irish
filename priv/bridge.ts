@@ -2,19 +2,24 @@
 /**
  * Irish Bridge — Connects Elixir to Baileys via JSON lines over stdio.
  *
- * Protocol:
- *   Elixir -> Bridge (commands):  {"id":"…","cmd":"…","args":{…}}
- *   Bridge -> Elixir (responses): {"id":"…","ok":true,"data":{…}}
- *   Bridge -> Elixir (events):    {"event":"…","data":{…}}
+ * Protocol (bidirectional):
+ *   Elixir -> Bridge (commands):  {"v":1,"id":"…","cmd":"…","args":{…}}
+ *   Elixir -> Bridge (responses): {"v":1,"id":"…","ok":true|false,"data":{…}}
+ *   Bridge -> Elixir (responses): {"v":1,"id":"…","ok":true,"data":{…}}
+ *   Bridge -> Elixir (requests):  {"v":1,"id":"…","req":"…","args":{…}}
+ *   Bridge -> Elixir (events):    {"v":1,"event":"…","data":{…}}
  */
 
 import makeWASocket, {
-  useMultiFileAuthState,
   DisconnectReason,
   makeCacheableSignalKeyStore,
+  initAuthCreds,
+  BufferJSON,
   downloadMediaMessage,
   type WASocket,
   type BaileysEventMap,
+  type AuthenticationCreds,
+  type SignalKeyStore,
 } from "baileys";
 
 // ---------------------------------------------------------------------------
@@ -144,20 +149,155 @@ function emit(msg: Record<string, unknown>) {
   }
 }
 
-async function* readLines(): AsyncGenerator<string> {
+// ---------------------------------------------------------------------------
+// Concurrent stdin dispatcher
+// ---------------------------------------------------------------------------
+
+// Pending responses from Elixir to bridge requests (keyed by request id)
+const pendingResponses = new Map<string, {
+  resolve: (data: any) => void;
+  reject: (err: Error) => void;
+  timer: number;
+}>();
+
+// Queue for incoming commands from Elixir
+const commandQueue: Array<{ resolve: (line: string) => void }> = [];
+const bufferedCommands: string[] = [];
+
+function dispatchLine(line: string) {
+  let parsed: any;
+  try {
+    parsed = JSON.parse(line);
+  } catch {
+    // Not JSON — ignore
+    return;
+  }
+
+  // Response to a bridge→Elixir request
+  if ("ok" in parsed && typeof parsed.id === "string" && pendingResponses.has(parsed.id)) {
+    const pending = pendingResponses.get(parsed.id)!;
+    pendingResponses.delete(parsed.id);
+    clearTimeout(pending.timer);
+    if (parsed.ok) {
+      pending.resolve(parsed.data);
+    } else {
+      pending.reject(new Error(parsed.error || "store error"));
+    }
+    return;
+  }
+
+  // Command from Elixir (has "cmd" field)
+  if ("cmd" in parsed) {
+    if (commandQueue.length > 0) {
+      commandQueue.shift()!.resolve(line);
+    } else {
+      bufferedCommands.push(line);
+    }
+    return;
+  }
+}
+
+/** Read the next command from Elixir (blocks until one arrives). */
+function nextCommand(): Promise<string> {
+  if (bufferedCommands.length > 0) {
+    return Promise.resolve(bufferedCommands.shift()!);
+  }
+  return new Promise((resolve) => commandQueue.push({ resolve }));
+}
+
+/** Start the stdin reader loop. Must be called once at startup. */
+async function startStdinDispatcher() {
   const reader = Deno.stdin.readable.getReader();
   const decoder = new TextDecoder();
   let buf = "";
   while (true) {
     const { value, done } = await reader.read();
-    if (done) break;
+    if (done) {
+      // stdin closed — Elixir exited
+      Deno.exit(0);
+    }
     buf += decoder.decode(value, { stream: true });
     const lines = buf.split("\n");
     buf = lines.pop()!;
     for (const line of lines) {
-      if (line.trim()) yield line;
+      if (line.trim()) dispatchLine(line);
     }
   }
+}
+
+let requestCounter = 0;
+
+/** Send a request to Elixir and await the response. */
+function requestElixir(req: string, args: Record<string, unknown> = {}): Promise<any> {
+  const id = `br_${++requestCounter}`;
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      pendingResponses.delete(id);
+      reject(new Error(`request to Elixir timed out: ${req}`));
+    }, 30_000);
+
+    pendingResponses.set(id, { resolve, reject, timer });
+    emit({ id, req, args });
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Callback auth adapter — delegates to Elixir via requestElixir
+// ---------------------------------------------------------------------------
+
+async function loadCallbackAuth(): Promise<{
+  state: { creds: AuthenticationCreds; keys: SignalKeyStore };
+  saveCreds: () => Promise<void>;
+}> {
+  // Load or initialize credentials
+  const raw = await requestElixir("auth.load_creds");
+  let creds: AuthenticationCreds;
+  if (raw) {
+    creds = JSON.parse(JSON.stringify(raw), BufferJSON.reviver);
+  } else {
+    creds = initAuthCreds();
+    // Save the freshly generated creds
+    await requestElixir("auth.save_creds", {
+      creds: JSON.parse(JSON.stringify(creds, BufferJSON.replacer)),
+    });
+  }
+
+  const keys: SignalKeyStore = {
+    get: async (type: string, ids: string[]) => {
+      const data = await requestElixir("auth.keys_get", { type, ids });
+      const result: Record<string, any> = {};
+      if (data) {
+        for (const [id, val] of Object.entries(data)) {
+          result[id] = JSON.parse(JSON.stringify(val), BufferJSON.reviver);
+        }
+      }
+      return result;
+    },
+    set: async (data: Record<string, Record<string, any>>) => {
+      // Serialize with BufferJSON so Elixir stores opaque JSON
+      const serialized: Record<string, Record<string, any>> = {};
+      for (const [type, entries] of Object.entries(data)) {
+        serialized[type] = {};
+        for (const [id, val] of Object.entries(entries)) {
+          serialized[type][id] = val === null || val === undefined
+            ? null
+            : JSON.parse(JSON.stringify(val, BufferJSON.replacer));
+        }
+      }
+      await requestElixir("auth.keys_set", { data: serialized });
+    },
+  };
+
+  const saveCreds = async () => {
+    await requestElixir("auth.save_creds", {
+      creds: JSON.parse(JSON.stringify(creds, BufferJSON.replacer)),
+    });
+  };
+
+  return {
+    state: { creds, keys: makeCacheableSignalKeyStore(keys, logger as any) },
+    saveCreds,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -196,16 +336,15 @@ let reconnecting = false;
 const msgCache = new Map<string, unknown>();
 const MAX_CACHE = 5000;
 
-async function connect(
-  authDir: string,
+async function connectWithCallbackAuth(
   config: Record<string, unknown> = {}
 ) {
-  const { state, saveCreds } = await useMultiFileAuthState(authDir);
+  const { state, saveCreds } = await loadCallbackAuth();
 
   sock = makeWASocket({
     auth: {
       creds: state.creds,
-      keys: makeCacheableSignalKeyStore(state.keys, logger as any),
+      keys: state.keys,
     },
     logger: logger as any,
     browser: ["Irish", "Elixir", "1.0.0"] as [string, string, string],
@@ -248,7 +387,7 @@ async function connect(
       if (!reconnecting) {
         reconnecting = true;
         logger.info("Reconnecting…");
-        connect(authDir, config).finally(() => {
+        connectWithCallbackAuth(config).finally(() => {
           reconnecting = false;
         });
       }
@@ -386,20 +525,19 @@ async function handle(c: Cmd): Promise<unknown> {
 // ---------------------------------------------------------------------------
 
 async function main() {
-  const stdin = readLines();
+  // Start the concurrent stdin dispatcher
+  startStdinDispatcher();
 
   // First message must be the init command
-  const first = await stdin.next();
-  if (first.done) Deno.exit(1);
-
-  const init: Cmd = JSON.parse(first.value, reviver);
+  const firstLine = await nextCommand();
+  const init: Cmd = JSON.parse(firstLine, reviver);
   if (init.cmd !== "init") {
     logger.error("First command must be init");
     Deno.exit(1);
   }
 
   try {
-    await connect(init.args.auth_dir || "./auth", init.args.config || {});
+    await connectWithCallbackAuth(init.args.config || {});
     emit({ id: init.id, ok: true, data: { status: "initialized" } });
   } catch (err) {
     emit({
@@ -411,7 +549,8 @@ async function main() {
   }
 
   // Command loop
-  for await (const line of stdin) {
+  while (true) {
+    const line = await nextCommand();
     let id: string | undefined;
     try {
       const cmd: Cmd = JSON.parse(line, reviver);

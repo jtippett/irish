@@ -23,7 +23,7 @@ defmodule Irish.Connection do
   defstruct [
     :port,
     :handler,
-    :auth_dir,
+    :auth_store,
     :config,
     :timeout,
     :init_id,
@@ -62,7 +62,7 @@ defmodule Irish.Connection do
   @impl true
   def init(opts) do
     handler = Keyword.get(opts, :handler, self())
-    auth_dir = Keyword.get(opts, :auth_dir, Path.join(File.cwd!(), "wa_auth"))
+    auth_store = resolve_auth_store(opts)
     config = Keyword.get(opts, :config, %{})
     timeout = Keyword.get(opts, :timeout, @default_timeout)
     init_timeout = Keyword.get(opts, :init_timeout, @default_init_timeout)
@@ -81,7 +81,7 @@ defmodule Irish.Connection do
     state = %__MODULE__{
       port: port,
       handler: handler,
-      auth_dir: auth_dir,
+      auth_store: auth_store,
       config: config,
       timeout: timeout,
       struct_events: struct_events
@@ -217,7 +217,6 @@ defmodule Irish.Connection do
         bridge_path = Path.join(bridge_dir, "bridge.ts")
 
         verify_npm_deps!(bridge_dir)
-        File.mkdir_p!(Keyword.get(opts, :auth_dir, "wa_auth"))
 
         deno = System.find_executable("deno") || raise "deno not found in PATH"
 
@@ -244,11 +243,9 @@ defmodule Irish.Connection do
   defp send_init(state, init_timeout) do
     id = gen_id()
 
-    {:ok, payload} =
-      Irish.Bridge.Protocol.encode_request(id, "init", %{
-        auth_dir: Path.expand(state.auth_dir),
-        config: state.config
-      })
+    init_args = %{config: state.config}
+
+    {:ok, payload} = Irish.Bridge.Protocol.encode_request(id, "init", init_args)
 
     Port.command(state.port, payload <> "\n")
     Process.send_after(self(), {:init_timeout, id}, init_timeout)
@@ -291,6 +288,34 @@ defmodule Irish.Connection do
     state
   end
 
+  defp dispatch(%{"req" => req, "id" => id} = msg, state) when is_binary(id) do
+    start_time = System.monotonic_time()
+
+    :telemetry.execute([:irish, :auth_store, :start], %{system_time: System.system_time()}, %{
+      req: req
+    })
+
+    result =
+      try do
+        handle_store_request(req, msg, state)
+      rescue
+        e ->
+          Logger.error("[Irish] auth store error on #{req}: #{Exception.message(e)}")
+          {:error, Exception.message(e)}
+      end
+
+    duration = System.monotonic_time() - start_time
+
+    :telemetry.execute([:irish, :auth_store, :stop], %{duration: duration}, %{
+      req: req,
+      result: if(match?({:ok, _}, result), do: :ok, else: :error)
+    })
+
+    {:ok, payload} = Irish.Bridge.Protocol.encode_response(id, result)
+    Port.command(state.port, payload <> "\n")
+    state
+  end
+
   defp dispatch(_msg, state), do: state
 
   defp decode_and_ignore(state, _data), do: state
@@ -314,6 +339,54 @@ defmodule Irish.Connection do
       {nil, _} ->
         state
     end
+  end
+
+  # -- Auth store helpers --
+
+  defp resolve_auth_store(opts) do
+    case Keyword.get(opts, :auth_store) do
+      {mod, store_opts} when is_atom(mod) and is_list(store_opts) ->
+        {mod, store_opts}
+
+      nil ->
+        dir = Keyword.get(opts, :auth_dir, Path.join(File.cwd!(), "wa_auth"))
+        {Irish.Auth.Store.File, [dir: Path.expand(dir)]}
+
+      other ->
+        raise ArgumentError,
+              "expected auth_store: {module, keyword_opts}, got: #{inspect(other)}"
+    end
+  end
+
+  defp handle_store_request("auth.load_creds", _msg, state) do
+    {mod, opts} = state.auth_store
+
+    case mod.load_creds(opts) do
+      {:ok, creds} -> {:ok, creds}
+      :none -> {:ok, nil}
+    end
+  end
+
+  defp handle_store_request("auth.save_creds", %{"args" => %{"creds" => creds}}, state) do
+    {mod, opts} = state.auth_store
+    :ok = mod.save_creds(creds, opts)
+    {:ok, nil}
+  end
+
+  defp handle_store_request("auth.keys_get", %{"args" => %{"type" => type, "ids" => ids}}, state) do
+    {mod, opts} = state.auth_store
+    mod.get(type, ids, opts)
+  end
+
+  defp handle_store_request("auth.keys_set", %{"args" => %{"data" => data}}, state) do
+    {mod, opts} = state.auth_store
+    :ok = mod.set(data, opts)
+    {:ok, nil}
+  end
+
+  defp handle_store_request(req, _msg, _state) do
+    Logger.warning("[Irish] unknown store request: #{req}")
+    {:error, "unknown_request: #{req}"}
   end
 
   # -- Helpers --

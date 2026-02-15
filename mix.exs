@@ -47,6 +47,7 @@ defmodule Irish.MixProject do
         "README.md",
         "CHANGELOG.md",
         "guides/integration.md",
+        "guides/auth-stores.md",
         "guides/common-patterns.md",
         "guides/events.md"
       ],

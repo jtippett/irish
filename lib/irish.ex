@@ -47,7 +47,10 @@ defmodule Irish do
 
   ## Options
 
-  - `:auth_dir` — directory to store WhatsApp session (default: `./wa_auth`)
+  - `:auth_store` — `{module, opts}` implementing `Irish.Auth.Store` for custom
+    auth persistence (database, Redis, S3, etc.). See `Irish.Auth.Store`.
+  - `:auth_dir` — directory to store WhatsApp session (default: `./wa_auth`).
+    Shorthand for `auth_store: {Irish.Auth.Store.File, dir: path}`.
   - `:handler` — PID to receive `{:wa, event, data}` messages (default: caller)
   - `:name` — optional registered name for the process
   - `:config` — Baileys socket config overrides (map)

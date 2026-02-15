@@ -326,7 +326,8 @@ Key events you'll receive as `{:wa, event_name, data}`:
 
 | Option | Default | Description |
 |---|---|---|
-| `:auth_dir` | `"./wa_auth"` | Directory to store WhatsApp session |
+| `:auth_store` | file store | `{module, opts}` — custom auth persistence ([guide](guides/auth-stores.md)) |
+| `:auth_dir` | `"./wa_auth"` | Directory to store WhatsApp session (shorthand for file store) |
 | `:handler` | caller PID | PID to receive `{:wa, event, data}` messages |
 | `:name` | none | Optional registered name for the process |
 | `:config` | `%{}` | Baileys socket config overrides |
@@ -393,13 +394,17 @@ WhatsApp socket and bridges it to Elixir over stdin/stdout:
   bridge reconnects internally. If the bridge process itself crashes, the
   GenServer exits and your supervisor restarts it.
 
-- **Auth state**: Managed by Baileys' `useMultiFileAuthState` inside the Deno
-  process. Credentials are persisted to the `auth_dir` you configure.
+- **Auth state**: Credentials and Signal keys are persisted through the
+  `Irish.Auth.Store` behaviour. By default, files in `auth_dir` (matching
+  Baileys' layout). Pass `auth_store: {MyStore, opts}` for database or
+  other backends — see the [Custom Auth Stores](guides/auth-stores.md) guide.
 
 ## Guides
 
 - [Building a GenServer Handler](guides/integration.md) — supervision,
   connection lifecycle, reconnection, test mode
+- [Custom Auth Stores](guides/auth-stores.md) — store credentials in a
+  database, Redis, S3, or any custom backend
 - [Common Patterns](guides/common-patterns.md) — event filtering, message
   processing, media downloads, groups, LID translation, error handling,
   telemetry
